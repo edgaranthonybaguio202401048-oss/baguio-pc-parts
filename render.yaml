@@ -1,0 +1,48 @@
+# Render Blueprint – deploys the Express API (backend/) to Render.
+# Values marked "sync: false" are asked for in the Render dashboard.
+services:
+  - type: web
+    name: baguio-pc-parts-api
+    runtime: node
+    plan: free
+    region: singapore
+    rootDir: backend
+    buildCommand: npm ci && npm run db:deploy
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 2h
+      - key: CORS_ORIGINS
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: API_PUBLIC_URL
+        sync: false
+      - key: PAYMENT_PROVIDER
+        value: maya
+      - key: MAYA_BASE_URL
+        value: https://pg-sandbox.paymaya.com
+      - key: MAYA_PUBLIC_KEY
+        sync: false
+      - key: MAYA_SECRET_KEY
+        sync: false
+      - key: MAYA_WEBHOOK_TOKEN
+        generateValue: true
+      - key: MAYA_WEBHOOK_ALLOWED_IPS
+        value: 13.229.160.234,3.1.199.75
+      - key: AI_PROVIDER
+        value: gemini
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
