@@ -1,0 +1,1207 @@
+openapi: 3.0.3
+info:
+  title: Baguio PC Parts API
+  version: 1.0.0
+  description: |
+    REST API for **Baguio PC Parts**, an AI-enhanced PC components store in Baguio City.
+
+    * Base path: `/api/v1` (see README "API versioning" for the breaking-change policy)
+    * Money is always **integer centavos** (`priceCents: 1149500` = ₱11,495.00), currency PHP
+    * Success envelope: `{ "success": true, "data": ..., "meta": ... }`
+    * Error envelope: `{ "success": false, "error": { "code", "message", "details" }, "requestId" }`
+    * Payments: Maya Checkout (sandbox). Orders become `paid` only after the backend verifies the payment with Maya's API.
+  contact:
+    name: Baguio PC Parts – ITPE101 Final Project
+servers:
+  - url: http://localhost:4000/api/v1
+    description: Local development
+tags:
+  - name: Auth
+  - name: Catalog
+  - name: Cart
+  - name: Checkout & Orders
+  - name: Payments & Webhooks
+  - name: PC Builds (Level 3)
+  - name: AI (Level 4)
+  - name: Admin
+security: []
+
+paths:
+  # ------------------------------------------------------------------ AUTH
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a customer account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+            example: { name: Juan Dela Cruz, email: juan@example.com, password: Secret123 }
+      responses:
+        '201':
+          description: Account created, token returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionResponse' }
+              example:
+                success: true
+                data: { token: eyJhbGciOi..., tokenType: Bearer, expiresIn: 2h, user: { id: 7d3c5a0e-1b2f-4c8e-9a51-2f6b8d0c1e11, name: Juan Dela Cruz, email: juan@example.com, role: customer } }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Sign in and receive a JWT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+            example: { email: juan@baguiopcparts.test, password: Customer#2026 }
+      responses:
+        '200':
+          description: Signed in
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionResponse' }
+              example:
+                success: true
+                data: { token: eyJhbGciOi..., tokenType: Bearer, expiresIn: 2h, user: { id: 7d3c5a0e-1b2f-4c8e-9a51-2f6b8d0c1e11, name: Juan Dela Cruz, email: juan@baguiopcparts.test, role: customer } }
+        '401':
+          description: Generic invalid credentials
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example: { success: false, error: { code: INVALID_CREDENTIALS, message: Invalid email or password }, requestId: 3f1c... }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Current user
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: The signed-in user
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessBase'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/User' } }
+              example: { success: true, data: { id: 7d3c5a0e-1b2f-4c8e-9a51-2f6b8d0c1e11, email: juan@baguiopcparts.test, name: Juan Dela Cruz, role: customer, createdAt: '2026-11-20T02:00:00Z' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ------------------------------------------------------------------ CATALOG
+  /products:
+    get:
+      tags: [Catalog]
+      summary: List active products (search, filter, sort, paginate)
+      parameters:
+        - { name: search, in: query, schema: { type: string, maxLength: 80 }, example: ryzen }
+        - { name: category, in: query, description: Category slug, schema: { type: string }, example: processors }
+        - { name: componentType, in: query, schema: { $ref: '#/components/schemas/ComponentType' } }
+        - { name: brand, in: query, schema: { type: string } }
+        - { name: minPrice, in: query, description: centavos, schema: { type: integer, minimum: 0 }, example: 500000 }
+        - { name: maxPrice, in: query, description: centavos, schema: { type: integer, minimum: 0 }, example: 2000000 }
+        - { name: inStock, in: query, schema: { type: string, enum: ['true', 'false'] } }
+        - { name: sort, in: query, schema: { type: string, enum: [newest, price_asc, price_desc, name_asc], default: newest } }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Page of products
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessBase'
+                  - type: object
+                    properties:
+                      data: { type: array, items: { $ref: '#/components/schemas/Product' } }
+                      meta: { $ref: '#/components/schemas/PageMeta' }
+              example:
+                success: true
+                data: [ { id: 0b8f2c1e-5d4a-4e7b-8c3f-1a2b3c4d5e6f, sku: CPU-R5-7600, name: AMD Ryzen 5 7600, slug: amd-ryzen-5-7600, brand: AMD, description: 6-core AM5 processor, priceCents: 1149500, currency: PHP, stock: 12, inStock: true, imageUrl: /images/cpu.webp, specs: { socket: AM5, tdpWatts: 65, memoryType: DDR5 }, isActive: true, category: { id: 9c1d..., name: Processors, slug: processors, componentType: CPU } } ]
+                meta: { total: 26, page: 1, limit: 12, totalPages: 3 }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /products/{id}:
+    get:
+      tags: [Catalog]
+      summary: Product detail (active products only)
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200':
+          description: Product
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessBase'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Product' } }
+              example: { success: true, data: { id: 0b8f2c1e-5d4a-4e7b-8c3f-1a2b3c4d5e6f, sku: CPU-R5-7600, name: AMD Ryzen 5 7600, priceCents: 1149500, currency: PHP, stock: 12, inStock: true } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /categories:
+    get:
+      tags: [Catalog]
+      summary: List categories with active product counts
+      responses:
+        '200':
+          description: Categories
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessBase'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/Category' } } }
+              example: { success: true, data: [ { id: 9c1d4e2a-7b6f-4a3c-9d8e-1f2a3b4c5d6e, name: Processors, slug: processors, componentType: CPU, productCount: 5 } ] }
+  /shipping-options:
+    get:
+      tags: [Catalog]
+      summary: Available shipping methods
+      responses:
+        '200':
+          description: Shipping methods
+          content:
+            application/json:
+              example: { success: true, data: [ { method: store_pickup, label: 'Pick up at Baguio PC Parts, Session Road' }, { method: baguio_delivery, label: Delivery within Baguio City / La Trinidad }, { method: luzon_courier, label: Courier delivery within Luzon } ] }
+
+  # ------------------------------------------------------------------ CART
+  /cart:
+    get:
+      tags: [Cart]
+      summary: Get my server-side cart with server-computed totals and compatibility report
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/CartOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    delete:
+      tags: [Cart]
+      summary: Empty my cart
+      security: [{ bearerAuth: [] }]
+      responses:
+        '204': { description: Cart emptied }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /cart/items:
+    post:
+      tags: [Cart]
+      summary: Add a product (quantity is added to any existing line)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CartAddRequest' }
+            example: { productId: 0b8f2c1e-5d4a-4e7b-8c3f-1a2b3c4d5e6f, quantity: 1 }
+      responses:
+        '200': { $ref: '#/components/responses/CartOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Not enough stock
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example: { success: false, error: { code: INSUFFICIENT_STOCK, message: Only 1 unit(s) of AMD Ryzen 7 7800X3D available, details: { productId: 0b8f..., requested: 2, available: 1 } }, requestId: 3f1c... }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /cart/items/{productId}:
+    parameters:
+      - { name: productId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      tags: [Cart]
+      summary: Set the quantity of a cart line
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, required: [quantity], properties: { quantity: { type: integer, minimum: 1, maximum: 20 } } }
+            example: { quantity: 2 }
+      responses:
+        '200': { $ref: '#/components/responses/CartOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Cart]
+      summary: Remove a cart line
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/CartOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ------------------------------------------------------------------ CHECKOUT & ORDERS
+  /checkout/preview:
+    post:
+      tags: [Checkout & Orders]
+      summary: Server-calculated order summary (subtotal, coupon discount, shipping, total)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CheckoutPreviewRequest' }
+            example: { couponCode: BAGUIO10, shippingMethod: baguio_delivery }
+      responses:
+        '200':
+          description: Quote
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessBase'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Quote' } }
+              example: { success: true, data: { subtotalCents: 2099000, discountCents: 209900, shippingFeeCents: 0, totalCents: 1889100, currency: PHP, shippingMethod: baguio_delivery, coupon: { code: BAGUIO10, type: percentage, value: 10 }, compatibility: { compatible: true, errors: [], warnings: [] }, stockIssues: [] } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422':
+          description: Invalid coupon or empty cart (total unchanged)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example: { success: false, error: { code: COUPON_EXPIRED, message: Coupon EXPIRED2025 has expired }, requestId: 3f1c... }
+  /orders:
+    post:
+      tags: [Checkout & Orders]
+      summary: Checkout – create an order from my cart and open a Maya payment session
+      description: |
+        Prices, discount and totals are ALWAYS recomputed on the server; any price fields in the body are ignored.
+        Stock is reserved atomically. Repeating the same `Idempotency-Key` returns the original order (HTTP 200, header `Idempotent-Replayed: true`).
+        Incompatible parts in the cart (e.g. AM5 CPU + AM4 board) block checkout with 409 `CART_INCOMPATIBLE`.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8, maxLength: 100, pattern: '^[\w-]+$' }, example: 6f1d2c3b-checkout-attempt-1 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CheckoutRequest' }
+            example: { couponCode: BAGUIO10, shippingMethod: store_pickup, shipping: { name: Juan Dela Cruz, phone: '09171234567', addressLine: 12 Session Road, city: Baguio City, province: Benguet, postalCode: '2600' } }
+      responses:
+        '201': { $ref: '#/components/responses/CheckoutOk' }
+        '200': { $ref: '#/components/responses/CheckoutOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409':
+          description: OUT_OF_STOCK, CART_INCOMPATIBLE or PRODUCT_UNAVAILABLE
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example: { success: false, error: { code: OUT_OF_STOCK, message: Not enough stock for AMD Ryzen 7 7800X3D, details: { productId: 0b8f..., requested: 1 } }, requestId: 3f1c... }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    get:
+      tags: [Checkout & Orders]
+      summary: My orders
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/OrderStatus' } }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Page of my orders
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessBase'
+                  - type: object
+                    properties:
+                      data: { type: array, items: { $ref: '#/components/schemas/OrderSummary' } }
+                      meta: { $ref: '#/components/schemas/PageMeta' }
+              example: { success: true, data: [ { id: a1b2c3d4-0000-4000-8000-000000000001, orderNumber: BPC-261124-4F2A9C, status: paid, totalCents: 1799500, currency: PHP, itemCount: 1, createdAt: '2026-11-24T08:00:00Z' } ], meta: { total: 1, page: 1, limit: 12, totalPages: 1 } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /orders/{id}:
+    get:
+      tags: [Checkout & Orders]
+      summary: My order detail (404 for other customers' orders)
+      security: [{ bearerAuth: [] }]
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200': { $ref: '#/components/responses/OrderOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /orders/{id}/cancel:
+    post:
+      tags: [Checkout & Orders]
+      summary: Cancel my unpaid order (releases stock and coupon)
+      security: [{ bearerAuth: [] }]
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200': { $ref: '#/components/responses/OrderOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Order is not pending_payment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example: { success: false, error: { code: ORDER_NOT_CANCELLABLE, message: 'Only unpaid orders can be cancelled (current status: paid)' }, requestId: 3f1c... }
+  /orders/{id}/payment-session:
+    post:
+      tags: [Payments & Webhooks]
+      summary: Retry payment – re-reserves stock if needed and opens a NEW Maya session
+      security: [{ bearerAuth: [] }]
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '201':
+          description: New session
+          content:
+            application/json:
+              example: { success: true, data: { checkoutUrl: 'https://payments-web-sandbox.paymaya.com/v2/checkout?id=...', order: { id: a1b2..., status: pending_payment } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '502': { $ref: '#/components/responses/GatewayError' }
+  /orders/{id}/verify-payment:
+    post:
+      tags: [Payments & Webhooks]
+      summary: Retrieve-on-return – asks Maya for the real status (used by /payment/success)
+      description: The return page is informational only; this endpoint reconciles with the gateway's API and never trusts the redirect.
+      security: [{ bearerAuth: [] }]
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200':
+          description: Outcome + authoritative order
+          content:
+            application/json:
+              example: { success: true, data: { outcome: paid, order: { id: a1b2..., status: paid } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /webhooks/maya:
+    post:
+      tags: [Payments & Webhooks]
+      summary: Maya Checkout webhook receiver
+      description: |
+        Register as `<API>/api/v1/webhooks/maya?token=<MAYA_WEBHOOK_TOKEN>` in Maya Manager (sandbox).
+        Verification: constant-time token check + Maya source-IP allow-list; then the payment is re-fetched from Maya
+        (`GET /payments/v1/payments/{id}`) and status, amount and currency are verified. Events are stored with a unique
+        (provider, eventId) so replays are acknowledged without side effects. Unknown event types are acknowledged and ignored.
+      parameters:
+        - { name: token, in: query, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MayaWebhook' }
+            example: { id: 2b9a0c7e-1111-4222-8333-444455556666, status: PAYMENT_SUCCESS, requestReferenceNumber: BPC-261124-4F2A9C-1A2B3C, amount: 17995, currency: PHP }
+      responses:
+        '200':
+          description: Acknowledged
+          content:
+            application/json:
+              examples:
+                processed: { value: { success: true, data: { received: true, processed: true, outcome: paid } } }
+                duplicate: { value: { success: true, data: { received: true, duplicate: true } } }
+                ignored: { value: { success: true, data: { received: true, ignored: true } } }
+        '401':
+          description: Verification failed – order untouched
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example: { success: false, error: { code: WEBHOOK_SIGNATURE_INVALID, message: Webhook verification failed }, requestId: 3f1c... }
+        '502': { $ref: '#/components/responses/GatewayError' }
+  /webhooks/paymongo:
+    post:
+      tags: [Payments & Webhooks]
+      summary: PayMongo webhook receiver (only when PAYMENT_PROVIDER=paymongo)
+      description: Verifies `Paymongo-Signature` (HMAC-SHA256 over `t.rawBody`) before processing.
+      parameters:
+        - { name: Paymongo-Signature, in: header, required: true, schema: { type: string }, example: 't=1732435200,te=5f2c...,li=' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+            example: { data: { id: evt_123, attributes: { type: checkout_session.payment.paid, livemode: false, data: { id: cs_123 } } } }
+      responses:
+        '200': { description: Acknowledged, content: { application/json: { example: { success: true, data: { received: true, processed: true, outcome: paid } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ------------------------------------------------------------------ BUILDS (Level 3)
+  /builds/compatibility-check:
+    post:
+      tags: [PC Builds (Level 3)]
+      summary: Check a set of parts for compatibility (public)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CompatibilityCheckRequest' }
+            example: { items: [ { slot: CPU, productId: 0b8f2c1e-5d4a-4e7b-8c3f-1a2b3c4d5e6f }, { slot: MOTHERBOARD, productId: 1c9e3d2f-6e5b-4f8c-9d4a-2b3c4d5e6f70 } ] }
+      responses:
+        '200':
+          description: Compatibility report
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessBase'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/CompatibilityReport' } }
+              example: { success: true, data: { totalCents: 1699000, currency: PHP, compatible: false, errors: [ { code: SOCKET_MISMATCH, message: AMD Ryzen 5 7600 (AM5) does not fit Gigabyte B550M DS3H (AM4) } ], warnings: [], estimatedWattage: 145, recommendedPsuWatts: 200 } }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /builds/shared/{shareCode}:
+    get:
+      tags: [PC Builds (Level 3)]
+      summary: View a publicly shared build
+      parameters:
+        - { name: shareCode, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9]{8}$' }, example: Xk7pQ2mZ }
+      responses:
+        '200': { $ref: '#/components/responses/BuildOk' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /builds:
+    get:
+      tags: [PC Builds (Level 3)]
+      summary: My saved builds
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Builds
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessBase'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/Build' } } }
+              example: { success: true, data: [] }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [PC Builds (Level 3)]
+      summary: Save a build (max 10; public builds must be compatible)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BuildRequest' }
+            example: { name: 1440p Gaming Rig, isPublic: true, items: [ { slot: CPU, productId: 0b8f2c1e-5d4a-4e7b-8c3f-1a2b3c4d5e6f, quantity: 1 } ] }
+      responses:
+        '201': { $ref: '#/components/responses/BuildOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /builds/{id}:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    get:
+      tags: [PC Builds (Level 3)]
+      summary: One of my builds
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/BuildOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [PC Builds (Level 3)]
+      summary: Update name, visibility or parts
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BuildUpdateRequest' }
+            example: { isPublic: false }
+      responses:
+        '200': { $ref: '#/components/responses/BuildOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [PC Builds (Level 3)]
+      summary: Delete a build
+      security: [{ bearerAuth: [] }]
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /builds/{id}/add-to-cart:
+    post:
+      tags: [PC Builds (Level 3)]
+      summary: Add every part of a compatible build to the cart (all-or-nothing)
+      security: [{ bearerAuth: [] }]
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200': { $ref: '#/components/responses/CartOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ------------------------------------------------------------------ AI (Level 4)
+  /ai/build-advisor:
+    post:
+      tags: [AI (Level 4)]
+      summary: AI-assisted build recommendation grounded on the live catalog
+      description: |
+        The backend retrieves in-stock candidates from PostgreSQL, asks the AI provider (Gemini) to choose only from those IDs,
+        validates the JSON, discards unknown IDs and wrong slots, and re-reads every pick from the database. Names, prices and
+        stock in the response are database values. Rate limited per user/IP; max input length 500 chars.
+      security: [ {}, { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AiAdvisorRequest' }
+            example: { prompt: 'Gaming PC for 1440p, budget around ₱70k, prefer AMD' }
+      responses:
+        '200':
+          description: AI-assisted recommendation
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessBase'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/AiAdvice' } }
+              example: { success: true, data: { aiAssisted: true, provider: gemini, model: gemini-2.5-flash, summary: A balanced AM5 build for 1440p gaming., warnings: [], picks: [ { slot: CPU, reason: Strong 6-core value, product: { id: 0b8f..., name: AMD Ryzen 5 7600, brand: AMD, priceCents: 1149500, stock: 12, imageUrl: /images/cpu.webp, componentType: CPU } } ], totalCents: 1149500, currency: PHP, budgetCents: 7000000, withinBudget: true, compatibility: { compatible: true, errors: [], warnings: [] }, discardedPicks: 0, fallbackProducts: [] } }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503':
+          description: AI provider unavailable – keyword-search fallback included
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example: { success: false, error: { code: AI_UNAVAILABLE, message: The AI advisor is temporarily unavailable. Showing keyword search results instead., details: { reason: timeout, fallback: { type: keyword_search, products: [] } } }, requestId: 3f1c... }
+
+  # ------------------------------------------------------------------ ADMIN
+  /admin/dashboard:
+    get:
+      tags: [Admin]
+      summary: Sales and inventory summary (live DB aggregates)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Dashboard
+          content:
+            application/json:
+              example: { success: true, data: { paidOrders: 4, grossSalesCents: 9850000, pendingOrders: 1, flaggedCount: 0, ordersByStatus: { paid: 3, delivered: 1 }, currency: PHP, lowStock: [ { id: 0b8f..., sku: CPU-R7-7800X3D, name: AMD Ryzen 7 7800X3D, stock: 1 } ], flaggedOrders: [], lowStockThreshold: 5 } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/products:
+    get:
+      tags: [Admin]
+      summary: List products including inactive
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: search, in: query, schema: { type: string } }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { description: Products, content: { application/json: { example: { success: true, data: [], meta: { total: 0, page: 1, limit: 12, totalPages: 1 } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Admin]
+      summary: Create a product
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProductCreate' }
+            example: { sku: GPU-RTX5060-GB, name: Gigabyte RTX 5060 Windforce 8GB, brand: Gigabyte, description: Efficient 1080p graphics card, priceCents: 1999500, stock: 6, categoryId: 9c1d4e2a-7b6f-4a3c-9d8e-1f2a3b4c5d6e, imageUrl: /images/gpu.webp, specs: { tdpWatts: 145, lengthMm: 245, recommendedPsuWatts: 550 } }
+      responses:
+        '201': { description: Created, content: { application/json: { example: { success: true, data: { id: 5e6f..., sku: GPU-RTX5060-GB, priceCents: 1999500, stock: 6 } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /admin/products/{id}:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    get:
+      tags: [Admin]
+      summary: Product (admin view)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Product, content: { application/json: { example: { success: true, data: { id: 5e6f..., sku: GPU-RTX5060-GB, isActive: true } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Admin]
+      summary: Update product fields (stock changes go through stock-adjustments)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProductUpdate' }
+            example: { priceCents: 1899500, isActive: false }
+      responses:
+        '200': { description: Updated, content: { application/json: { example: { success: true, data: { id: 5e6f..., priceCents: 1899500, isActive: false } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Admin]
+      summary: Delete product – soft delete if it has any order/build/stock history
+      description: Response header `X-Delete-Mode` is `soft` or `hard`. Order history is never orphaned.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /admin/products/{id}/stock-adjustments:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    post:
+      tags: [Admin]
+      summary: Adjust stock with an auditable reason
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StockAdjustmentRequest' }
+            example: { delta: 5, reason: Delivery from supplier DR-1182 }
+      responses:
+        '201': { description: Adjusted, content: { application/json: { example: { success: true, data: { productId: 5e6f..., previousStock: 6, newStock: 11 } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Would make stock negative
+          content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' }, example: { success: false, error: { code: STOCK_WOULD_BE_NEGATIVE, message: Stock cannot become negative, details: { current: 2, delta: -5 } }, requestId: 3f1c... } } }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    get:
+      tags: [Admin]
+      summary: Stock adjustment history (previous, new, reason, actor, timestamp)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: History, content: { application/json: { example: { success: true, data: [ { previousStock: 6, newStock: 11, delta: 5, reason: Delivery from supplier DR-1182, actorType: admin, createdAt: '2026-11-24T03:00:00Z', actor: { name: Store Admin } } ] } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/categories:
+    post:
+      tags: [Admin]
+      summary: Create a category
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CategoryRequest' }
+            example: { name: CPU Coolers, slug: cpu-coolers, componentType: ACCESSORY }
+      responses:
+        '201': { description: Created, content: { application/json: { example: { success: true, data: { id: 7a8b..., name: CPU Coolers, slug: cpu-coolers, componentType: ACCESSORY } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /admin/categories/{id}:
+    patch:
+      tags: [Admin]
+      summary: Update a category
+      security: [{ bearerAuth: [] }]
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CategoryRequest' }
+            example: { name: CPU Coolers & Fans }
+      responses:
+        '200': { description: Updated, content: { application/json: { example: { success: true, data: { name: CPU Coolers & Fans } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /admin/coupons:
+    get:
+      tags: [Admin]
+      summary: List coupons
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Coupons, content: { application/json: { example: { success: true, data: [ { id: c0c0..., code: BAGUIO10, type: percentage, value: 10, minSpendCents: 1000000, usageLimit: 100, usedCount: 3, perCustomerLimit: 1, isActive: true } ] } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Admin]
+      summary: Create a coupon
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CouponRequest' }
+            example: { code: SESSIONRD5, type: percentage, value: 5, maxDiscountCents: 100000, minSpendCents: 500000, expiresAt: '2027-01-31T15:59:59Z', usageLimit: 50, perCustomerLimit: 1 }
+      responses:
+        '201': { description: Created, content: { application/json: { example: { success: true, data: { code: SESSIONRD5, usedCount: 0 } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /admin/coupons/{id}:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    patch:
+      tags: [Admin]
+      summary: Update a coupon (e.g. deactivate)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CouponRequest' }
+            example: { isActive: false }
+      responses:
+        '200': { description: Updated, content: { application/json: { example: { success: true, data: { code: SESSIONRD5, isActive: false } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Admin]
+      summary: Delete an unused coupon (used coupons must be deactivated → 409)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /admin/orders:
+    get:
+      tags: [Admin]
+      summary: List orders filtered by status, date range and payment flag
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/OrderStatus' } }
+        - { name: from, in: query, schema: { type: string, format: date-time }, example: '2026-11-01T00:00:00+08:00' }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: flagged, in: query, schema: { type: string, enum: ['true', 'false'] } }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { description: Orders, content: { application/json: { example: { success: true, data: [ { id: a1b2..., orderNumber: BPC-261124-4F2A9C, status: paid, totalCents: 1799500, customer: { name: Juan Dela Cruz } } ], meta: { total: 1, page: 1, limit: 12, totalPages: 1 } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /admin/orders/{id}:
+    get:
+      tags: [Admin]
+      summary: Order detail incl. payment amounts reported by the gateway and flag reason
+      security: [{ bearerAuth: [] }]
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200': { $ref: '#/components/responses/OrderOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /admin/orders/{id}/status:
+    patch:
+      tags: [Admin]
+      summary: Move an order along the lifecycle (illegal transitions → 409)
+      security: [{ bearerAuth: [] }]
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OrderStatusUpdate' }
+            example: { status: processing, note: Assembling and stress-testing build }
+      responses:
+        '200': { $ref: '#/components/responses/OrderOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Illegal transition
+          content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' }, example: { success: false, error: { code: ILLEGAL_TRANSITION, message: Cannot change order from pending_payment to shipped as admin, details: { from: pending_payment, to: shipped, allowed: [cancelled] } }, requestId: 3f1c... } } }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /admin/orders/{id}/reconcile:
+    post:
+      tags: [Admin]
+      summary: Reconcile with the gateway (recovers missed webhooks)
+      security: [{ bearerAuth: [] }]
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200': { description: Outcome, content: { application/json: { example: { success: true, data: { outcome: paid, order: { id: a1b2..., status: paid } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '502': { $ref: '#/components/responses/GatewayError' }
+  /admin/webhook-events:
+    get:
+      tags: [Admin]
+      summary: Webhook event log
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { description: Events, content: { application/json: { example: { success: true, data: [ { provider: maya, eventId: '2b9a...:PAYMENT_SUCCESS', type: PAYMENT_SUCCESS, status: processed, receivedAt: '2026-11-24T08:01:00Z' } ], meta: { total: 1, page: 1, limit: 12, totalPages: 1 } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  parameters:
+    Id: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    Page: { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+    Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 12 } }
+  responses:
+    Unauthorized:
+      description: Missing, invalid or expired token
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' }, example: { success: false, error: { code: AUTH_REQUIRED, message: Authentication required }, requestId: 3f1c... } } }
+    Forbidden:
+      description: Authenticated but wrong role
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' }, example: { success: false, error: { code: FORBIDDEN, message: You do not have permission to perform this action }, requestId: 3f1c... } } }
+    NotFound:
+      description: Not found
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' }, example: { success: false, error: { code: NOT_FOUND, message: Order not found }, requestId: 3f1c... } } }
+    Conflict:
+      description: Conflict with the current state of the resource
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' }, example: { success: false, error: { code: BUILD_INCOMPATIBLE, message: Only compatible builds can be shared publicly }, requestId: 3f1c... } } }
+    ValidationError:
+      description: Field-level validation failure
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' }, example: { success: false, error: { code: VALIDATION_ERROR, message: Request validation failed, details: [ { location: body, field: email, message: Invalid email } ] }, requestId: 3f1c... } } }
+    RateLimited:
+      description: Too many requests
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' }, example: { success: false, error: { code: RATE_LIMITED, message: Too many requests }, requestId: 3f1c... } } }
+    GatewayError:
+      description: Payment gateway unreachable or returned an error
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' }, example: { success: false, error: { code: PAYMENT_GATEWAY_UNAVAILABLE, message: maya could not be reached }, requestId: 3f1c... } } }
+    CartOk:
+      description: Cart
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SuccessBase'
+              - type: object
+                properties: { data: { $ref: '#/components/schemas/Cart' } }
+          example: { success: true, data: { items: [ { productId: 0b8f..., sku: CPU-R5-7600, name: AMD Ryzen 5 7600, unitPriceCents: 1149500, quantity: 1, lineTotalCents: 1149500, stock: 12, available: true, issue: null } ], itemCount: 1, subtotalCents: 1149500, currency: PHP, compatibility: { compatible: true, errors: [], warnings: [] } } }
+    CheckoutOk:
+      description: 201 new order / 200 idempotent replay of the same order
+      headers:
+        Idempotent-Replayed: { schema: { type: string, enum: ['true', 'false'] } }
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SuccessBase'
+              - type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      order: { $ref: '#/components/schemas/Order' }
+                      checkoutUrl: { type: string, nullable: true }
+                      paymentError: { type: object, nullable: true }
+          example: { success: true, data: { order: { id: a1b2c3d4-0000-4000-8000-000000000001, orderNumber: BPC-261124-4F2A9C, status: pending_payment, subtotalCents: 1799500, discountCents: 0, shippingFeeCents: 0, totalCents: 1799500, currency: PHP }, checkoutUrl: 'https://payments-web-sandbox.paymaya.com/v2/checkout?id=2b9a...', paymentError: null } }
+    OrderOk:
+      description: Order
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SuccessBase'
+              - type: object
+                properties: { data: { $ref: '#/components/schemas/Order' } }
+          example: { success: true, data: { id: a1b2c3d4-0000-4000-8000-000000000001, orderNumber: BPC-261124-4F2A9C, status: paid, totalCents: 1799500, currency: PHP, items: [ { productName: MSI GeForce RTX 4060 Ventus 2X 8GB, unitPriceCents: 1799500, quantity: 1, lineTotalCents: 1799500 } ], statusHistory: [ { from: null, to: pending_payment, actorType: customer, at: '2026-11-24T08:00:00Z' }, { from: pending_payment, to: paid, actorType: gateway, at: '2026-11-24T08:01:00Z' } ] } }
+    BuildOk:
+      description: Build
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SuccessBase'
+              - type: object
+                properties: { data: { $ref: '#/components/schemas/Build' } }
+          example: { success: true, data: { id: b0b0..., name: 1440p Gaming Rig, isPublic: true, shareCode: Xk7pQ2mZ, shareUrl: 'https://baguio-pc-parts.vercel.app/builds/shared/Xk7pQ2mZ', items: [], totalCents: 0, currency: PHP, compatibility: { compatible: true, errors: [], warnings: [] } } }
+  schemas:
+    SuccessBase:
+      type: object
+      required: [success]
+      properties: { success: { type: boolean, example: true } }
+    ErrorResponse:
+      type: object
+      required: [success, error, requestId]
+      properties:
+        success: { type: boolean, example: false }
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, example: VALIDATION_ERROR }
+            message: { type: string }
+            details: {}
+        requestId: { type: string }
+    PageMeta:
+      type: object
+      properties: { total: { type: integer }, page: { type: integer }, limit: { type: integer }, totalPages: { type: integer } }
+    ComponentType: { type: string, enum: [CPU, MOTHERBOARD, RAM, GPU, PSU, CASE, STORAGE, ACCESSORY] }
+    BuildSlot: { type: string, enum: [CPU, MOTHERBOARD, RAM, GPU, PSU, CASE, STORAGE] }
+    OrderStatus: { type: string, enum: [pending_payment, paid, processing, shipped, delivered, cancelled, expired] }
+    ShippingMethod: { type: string, enum: [store_pickup, baguio_delivery, luzon_courier] }
+    User:
+      type: object
+      properties: { id: { type: string, format: uuid }, email: { type: string }, name: { type: string }, role: { type: string, enum: [customer, admin] }, createdAt: { type: string, format: date-time } }
+    RegisterRequest:
+      type: object
+      additionalProperties: false
+      required: [name, email, password]
+      properties:
+        name: { type: string, minLength: 2, maxLength: 80 }
+        email: { type: string, format: email }
+        password: { type: string, minLength: 8, maxLength: 72, description: Must contain a letter and a number }
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties: { email: { type: string, format: email }, password: { type: string } }
+    SessionResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties: { token: { type: string }, tokenType: { type: string }, expiresIn: { type: string }, user: { $ref: '#/components/schemas/User' } }
+    Category:
+      type: object
+      properties: { id: { type: string, format: uuid }, name: { type: string }, slug: { type: string }, componentType: { $ref: '#/components/schemas/ComponentType' }, productCount: { type: integer } }
+    CategoryRequest:
+      type: object
+      additionalProperties: false
+      properties: { name: { type: string }, slug: { type: string, pattern: '^[a-z0-9-]+$' }, componentType: { $ref: '#/components/schemas/ComponentType' } }
+    Product:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        sku: { type: string }
+        name: { type: string }
+        slug: { type: string }
+        brand: { type: string }
+        description: { type: string }
+        priceCents: { type: integer, description: Centavos }
+        currency: { type: string, example: PHP }
+        stock: { type: integer }
+        inStock: { type: boolean }
+        imageUrl: { type: string, nullable: true }
+        specs: { type: object, additionalProperties: true, description: 'Compatibility attributes, e.g. socket, memoryType, tdpWatts' }
+        isActive: { type: boolean }
+        category: { $ref: '#/components/schemas/Category' }
+    ProductCreate:
+      type: object
+      additionalProperties: false
+      required: [sku, name, brand, description, priceCents, stock, categoryId]
+      properties:
+        sku: { type: string, pattern: '^[A-Z0-9-]+$' }
+        name: { type: string }
+        brand: { type: string }
+        description: { type: string, minLength: 10 }
+        priceCents: { type: integer, minimum: 1 }
+        stock: { type: integer, minimum: 0 }
+        categoryId: { type: string, format: uuid }
+        imageUrl: { type: string }
+        specs: { type: object, additionalProperties: true }
+        isActive: { type: boolean }
+    ProductUpdate:
+      type: object
+      additionalProperties: false
+      description: Any ProductCreate field except stock
+      properties:
+        name: { type: string }
+        brand: { type: string }
+        description: { type: string }
+        priceCents: { type: integer, minimum: 1 }
+        categoryId: { type: string, format: uuid }
+        imageUrl: { type: string }
+        specs: { type: object, additionalProperties: true }
+        isActive: { type: boolean }
+    StockAdjustmentRequest:
+      type: object
+      additionalProperties: false
+      required: [delta, reason]
+      properties: { delta: { type: integer, description: Non-zero; negative removes stock }, reason: { type: string, minLength: 3 } }
+    CartAddRequest:
+      type: object
+      additionalProperties: false
+      required: [productId, quantity]
+      properties: { productId: { type: string, format: uuid }, quantity: { type: integer, minimum: 1, maximum: 20 } }
+    Cart:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              productId: { type: string }
+              name: { type: string }
+              unitPriceCents: { type: integer }
+              quantity: { type: integer }
+              lineTotalCents: { type: integer }
+              stock: { type: integer }
+              available: { type: boolean }
+              issue: { type: string, nullable: true, enum: [PRODUCT_UNAVAILABLE, INSUFFICIENT_STOCK, null] }
+        itemCount: { type: integer }
+        subtotalCents: { type: integer }
+        currency: { type: string }
+        compatibility: { $ref: '#/components/schemas/CompatibilityReport' }
+    CheckoutPreviewRequest:
+      type: object
+      additionalProperties: false
+      properties: { couponCode: { type: string }, shippingMethod: { $ref: '#/components/schemas/ShippingMethod' } }
+    Shipping:
+      type: object
+      additionalProperties: false
+      required: [name, phone, addressLine, city, province, postalCode]
+      properties:
+        name: { type: string }
+        phone: { type: string, pattern: '^(\+63|0)9\d{9}$' }
+        addressLine: { type: string }
+        city: { type: string }
+        province: { type: string }
+        postalCode: { type: string, pattern: '^\d{4}$' }
+    CheckoutRequest:
+      type: object
+      description: Any extra fields (e.g. totalCents, prices) are ignored – totals are computed on the server.
+      required: [shippingMethod, shipping]
+      properties:
+        couponCode: { type: string }
+        shippingMethod: { $ref: '#/components/schemas/ShippingMethod' }
+        shipping: { $ref: '#/components/schemas/Shipping' }
+    Quote:
+      type: object
+      properties:
+        subtotalCents: { type: integer }
+        discountCents: { type: integer }
+        shippingFeeCents: { type: integer }
+        totalCents: { type: integer }
+        currency: { type: string }
+        coupon: { type: object, nullable: true }
+        compatibility: { $ref: '#/components/schemas/CompatibilityReport' }
+        stockIssues: { type: array, items: { type: object } }
+    OrderSummary:
+      type: object
+      properties: { id: { type: string }, orderNumber: { type: string }, status: { $ref: '#/components/schemas/OrderStatus' }, totalCents: { type: integer }, currency: { type: string }, itemCount: { type: integer }, createdAt: { type: string, format: date-time } }
+    Order:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        orderNumber: { type: string }
+        status: { $ref: '#/components/schemas/OrderStatus' }
+        currency: { type: string }
+        subtotalCents: { type: integer }
+        discountCents: { type: integer }
+        shippingFeeCents: { type: integer }
+        totalCents: { type: integer }
+        shippingMethod: { $ref: '#/components/schemas/ShippingMethod' }
+        shipping: { $ref: '#/components/schemas/Shipping' }
+        items: { type: array, items: { type: object } }
+        statusHistory: { type: array, items: { type: object, properties: { from: { type: string, nullable: true }, to: { type: string }, actorType: { type: string }, note: { type: string, nullable: true }, at: { type: string, format: date-time } } } }
+        payment: { type: object, nullable: true }
+        reservationExpiresAt: { type: string, format: date-time, nullable: true }
+        paymentFlagged: { type: boolean, description: Admin only }
+        flagReason: { type: string, nullable: true, description: Admin only }
+        paidAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+    OrderStatusUpdate:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties: { status: { $ref: '#/components/schemas/OrderStatus' }, note: { type: string, maxLength: 200 } }
+    CouponRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        code: { type: string, pattern: '^[A-Z0-9_-]+$' }
+        description: { type: string }
+        type: { type: string, enum: [percentage, fixed] }
+        value: { type: integer, description: 'percentage: 1–100; fixed: centavos' }
+        maxDiscountCents: { type: integer }
+        minSpendCents: { type: integer }
+        startsAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        usageLimit: { type: integer }
+        perCustomerLimit: { type: integer }
+        isActive: { type: boolean }
+    MayaWebhook:
+      type: object
+      description: Hint only – the backend re-fetches the payment from Maya before acting.
+      properties: { id: { type: string }, status: { type: string, example: PAYMENT_SUCCESS }, requestReferenceNumber: { type: string } }
+    CompatibilityIssue:
+      type: object
+      properties: { code: { type: string, example: SOCKET_MISMATCH }, message: { type: string } }
+    CompatibilityReport:
+      type: object
+      properties:
+        compatible: { type: boolean }
+        errors: { type: array, items: { $ref: '#/components/schemas/CompatibilityIssue' } }
+        warnings: { type: array, items: { $ref: '#/components/schemas/CompatibilityIssue' } }
+        estimatedWattage: { type: integer, nullable: true }
+        recommendedPsuWatts: { type: integer, nullable: true }
+    BuildItemInput:
+      type: object
+      additionalProperties: false
+      required: [slot, productId]
+      properties: { slot: { $ref: '#/components/schemas/BuildSlot' }, productId: { type: string, format: uuid }, quantity: { type: integer, minimum: 1, maximum: 4, default: 1 } }
+    CompatibilityCheckRequest:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties: { items: { type: array, minItems: 1, maxItems: 12, items: { $ref: '#/components/schemas/BuildItemInput' } } }
+    BuildRequest:
+      type: object
+      additionalProperties: false
+      required: [name, items]
+      properties: { name: { type: string }, isPublic: { type: boolean, default: false }, items: { type: array, items: { $ref: '#/components/schemas/BuildItemInput' } } }
+    BuildUpdateRequest:
+      type: object
+      additionalProperties: false
+      properties: { name: { type: string }, isPublic: { type: boolean }, items: { type: array, items: { $ref: '#/components/schemas/BuildItemInput' } } }
+    Build:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        isPublic: { type: boolean }
+        shareCode: { type: string, nullable: true }
+        shareUrl: { type: string, nullable: true }
+        items: { type: array, items: { type: object } }
+        totalCents: { type: integer }
+        currency: { type: string }
+        compatibility: { $ref: '#/components/schemas/CompatibilityReport' }
+    AiAdvisorRequest:
+      type: object
+      additionalProperties: false
+      required: [prompt]
+      properties:
+        prompt: { type: string, minLength: 5, maxLength: 500 }
+        budgetCents: { type: integer, minimum: 500000, maximum: 100000000 }
+    AiAdvice:
+      type: object
+      properties:
+        aiAssisted: { type: boolean, example: true }
+        provider: { type: string }
+        model: { type: string }
+        summary: { type: string }
+        warnings: { type: array, items: { type: string } }
+        picks:
+          type: array
+          items:
+            type: object
+            properties:
+              slot: { $ref: '#/components/schemas/BuildSlot' }
+              reason: { type: string }
+              product: { type: object, description: Authoritative database record (id, name, priceCents, stock) }
+        totalCents: { type: integer }
+        budgetCents: { type: integer, nullable: true }
+        withinBudget: { type: boolean, nullable: true }
+        compatibility: { $ref: '#/components/schemas/CompatibilityReport' }
+        discardedPicks: { type: integer }
+        fallbackProducts: { type: array, items: { type: object } }

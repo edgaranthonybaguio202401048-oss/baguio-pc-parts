@@ -1,0 +1,45 @@
+{
+  "id": "f8a49571-3da0-4da2-8cf5-b265447010a4",
+  "name": "Baguio PC Parts – Local",
+  "values": [
+    {
+      "key": "rootUrl",
+      "value": "http://localhost:4000",
+      "enabled": true
+    },
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:4000/api/v1",
+      "enabled": true
+    },
+    {
+      "key": "customerEmail",
+      "value": "juan@baguiopcparts.test",
+      "enabled": true
+    },
+    {
+      "key": "customerPassword",
+      "value": "Customer#2026",
+      "enabled": true,
+      "type": "secret"
+    },
+    {
+      "key": "adminEmail",
+      "value": "admin@baguiopcparts.test",
+      "enabled": true
+    },
+    {
+      "key": "adminPassword",
+      "value": "Admin#2026",
+      "enabled": true,
+      "type": "secret"
+    },
+    {
+      "key": "mayaWebhookToken",
+      "value": "",
+      "enabled": true,
+      "type": "secret"
+    }
+  ],
+  "_postman_variable_scope": "environment"
+}

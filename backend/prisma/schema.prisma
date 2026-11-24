@@ -1,0 +1,400 @@
+// Baguio PC Parts – PostgreSQL schema (Prisma ORM)
+// Money is ALWAYS stored as integer centavos (Int), never floating point.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------- enums
+
+enum Role {
+  customer
+  admin
+}
+
+enum ComponentType {
+  CPU
+  MOTHERBOARD
+  RAM
+  GPU
+  PSU
+  CASE
+  STORAGE
+  ACCESSORY
+}
+
+enum OrderStatus {
+  pending_payment
+  paid
+  processing
+  shipped
+  delivered
+  cancelled
+  expired
+}
+
+enum ShippingMethod {
+  store_pickup     // pick up at the Baguio City store
+  baguio_delivery  // within Baguio / La Trinidad
+  luzon_courier    // rest of Luzon
+}
+
+enum DiscountType {
+  percentage
+  fixed
+}
+
+enum ReservationStatus {
+  active
+  committed
+  released
+}
+
+enum PaymentStatus {
+  pending
+  paid
+  failed
+  cancelled
+  expired
+  mismatch
+}
+
+enum WebhookStatus {
+  received
+  processed
+  ignored
+  rejected
+  failed
+}
+
+enum ActorType {
+  customer
+  admin
+  system
+  gateway
+}
+
+// ---------------------------------------------------------------- identity
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         Role     @default(customer)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  cartItems   CartItem[]
+  orders      Order[]
+  redemptions CouponRedemption[]
+  builds      Build[]
+  notifications Notification[]
+  inventoryAdjustments InventoryAdjustment[]
+}
+
+// ---------------------------------------------------------------- catalog
+
+model Category {
+  id            String        @id @default(uuid())
+  name          String        @unique
+  slug          String        @unique
+  componentType ComponentType
+  createdAt     DateTime      @default(now())
+  products      Product[]
+}
+
+model Product {
+  id          String    @id @default(uuid())
+  sku         String    @unique
+  name        String
+  slug        String    @unique
+  brand       String
+  description String
+  priceCents  Int
+  stock       Int       @default(0)
+  imageUrl    String?
+  // Component attributes used by the compatibility engine, e.g.
+  // { "socket": "AM5", "memoryType": "DDR5", "tdpWatts": 105 }
+  specs       Json      @default("{}")
+  isActive    Boolean   @default(true)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  categoryId String
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  cartItems    CartItem[]
+  orderItems   OrderItem[]
+  reservations StockReservation[]
+  adjustments  InventoryAdjustment[]
+  buildItems   BuildItem[]
+
+  @@index([categoryId])
+  @@index([isActive, deletedAt])
+  @@index([priceCents])
+  @@index([createdAt])
+}
+
+model InventoryAdjustment {
+  id            String   @id @default(uuid())
+  productId     String
+  previousStock Int
+  newStock      Int
+  delta         Int
+  reason        String
+  actorType     ActorType
+  actorId       String?
+  orderId       String?
+  createdAt     DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  actor   User?   @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([productId, createdAt])
+}
+
+// ---------------------------------------------------------------- cart
+
+model CartItem {
+  id        String   @id @default(uuid())
+  userId    String
+  productId String
+  quantity  Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, productId])
+}
+
+// ---------------------------------------------------------------- coupons
+
+model Coupon {
+  id                String       @id @default(uuid())
+  code              String       @unique
+  description       String?
+  type              DiscountType
+  // percentage: whole percent (e.g. 10 = 10%); fixed: centavos
+  value             Int
+  maxDiscountCents  Int?
+  minSpendCents     Int          @default(0)
+  startsAt          DateTime?
+  expiresAt         DateTime?
+  usageLimit        Int?
+  perCustomerLimit  Int          @default(1)
+  usedCount         Int          @default(0)
+  isActive          Boolean      @default(true)
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  redemptions CouponRedemption[]
+  orders      Order[]
+}
+
+model CouponRedemption {
+  id        String   @id @default(uuid())
+  couponId  String
+  userId    String
+  orderId   String   @unique
+  createdAt DateTime @default(now())
+
+  coupon Coupon @relation(fields: [couponId], references: [id], onDelete: Restrict)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  order  Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([couponId, userId])
+}
+
+// ---------------------------------------------------------------- orders
+
+model Order {
+  id               String         @id @default(uuid())
+  orderNumber      String         @unique
+  userId           String
+  status           OrderStatus    @default(pending_payment)
+  currency         String         @default("PHP")
+  subtotalCents    Int
+  discountCents    Int            @default(0)
+  shippingFeeCents Int            @default(0)
+  totalCents       Int
+  couponId         String?
+  shippingMethod   ShippingMethod
+  shipName         String
+  shipPhone        String
+  shipAddressLine  String
+  shipCity         String
+  shipProvince     String
+  shipPostalCode   String
+  idempotencyKey   String
+  paymentFlagged   Boolean        @default(false)
+  flagReason       String?
+  paidAt           DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  user          User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
+  coupon        Coupon?              @relation(fields: [couponId], references: [id], onDelete: SetNull)
+  items         OrderItem[]
+  statusHistory OrderStatusHistory[]
+  reservations  StockReservation[]
+  payments      Payment[]
+  redemption    CouponRedemption?
+
+  // L2-08: the database – not only the UI – blocks duplicate checkouts
+  @@unique([userId, idempotencyKey])
+  @@index([status, createdAt])
+  @@index([userId, createdAt])
+}
+
+model OrderItem {
+  id             String @id @default(uuid())
+  orderId        String
+  productId      String
+  // snapshots so history survives later price/name changes
+  productName    String
+  sku            String
+  unitPriceCents Int
+  quantity       Int
+  lineTotalCents Int
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([productId])
+}
+
+model OrderStatusHistory {
+  id         String       @id @default(uuid())
+  orderId    String
+  fromStatus OrderStatus?
+  toStatus   OrderStatus
+  actorType  ActorType
+  actorId    String?
+  note       String?
+  createdAt  DateTime     @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt])
+}
+
+model StockReservation {
+  id        String            @id @default(uuid())
+  orderId   String
+  productId String
+  quantity  Int
+  status    ReservationStatus @default(active)
+  expiresAt DateTime
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([status, expiresAt])
+  @@index([orderId])
+}
+
+// ---------------------------------------------------------------- payments
+
+model Payment {
+  id                 String        @id @default(uuid())
+  orderId            String
+  provider           String
+  gatewayRef         String        @unique // Maya checkoutId / PayMongo checkout_session id
+  requestReference   String        @unique
+  checkoutUrl        String
+  status             PaymentStatus @default(pending)
+  amountCents        Int
+  currency           String
+  gatewayAmountCents Int?
+  gatewayCurrency    String?
+  gatewayStatus      String?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+}
+
+model WebhookEvent {
+  id          String        @id @default(uuid())
+  provider    String
+  eventId     String
+  type        String
+  payload     Json
+  status      WebhookStatus @default(received)
+  error       String?
+  receivedAt  DateTime      @default(now())
+  processedAt DateTime?
+
+  // L2-05: replaying the same event cannot be stored/processed twice
+  @@unique([provider, eventId])
+  @@index([receivedAt])
+}
+
+// ---------------------------------------------------------------- Level 3: PC builds
+
+enum BuildSlot {
+  CPU
+  MOTHERBOARD
+  RAM
+  GPU
+  PSU
+  CASE
+  STORAGE
+}
+
+model Build {
+  id        String   @id @default(uuid())
+  userId    String
+  name      String
+  shareCode String   @unique
+  isPublic  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user  User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items BuildItem[]
+
+  @@index([userId])
+}
+
+model BuildItem {
+  id        String    @id @default(uuid())
+  buildId   String
+  slot      BuildSlot
+  productId String
+  quantity  Int       @default(1)
+
+  build   Build   @relation(fields: [buildId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([buildId, slot, productId])
+}
+
+// ---------------------------------------------------------------- notifications (Observer output)
+
+model Notification {
+  id        String    @id @default(uuid())
+  userId    String
+  type      String
+  message   String
+  orderId   String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
